@@ -1,0 +1,79 @@
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Extract ZIP if project is compressed
+        shell: bash
+        run: |
+          echo "Checking repository files..."
+          ls -la
+
+          if [ ! -f "pubspec.yaml" ]; then
+            ZIP_FILE=$(find . -maxdepth 2 -type f \( -name "*.zip" -o -name "*.ZIP" \) | head -n 1)
+
+            if [ -n "$ZIP_FILE" ]; then
+              echo "Found ZIP file: $ZIP_FILE"
+              mkdir -p extracted_project
+              unzip -o "$ZIP_FILE" -d extracted_project
+              echo "ZIP extracted successfully"
+            else
+              echo "No ZIP file found"
+            fi
+          fi
+
+      - name: Find Flutter project
+        id: find_project
+        shell: bash
+        run: |
+          if [ -f "pubspec.yaml" ]; then
+            PROJECT_DIR="."
+          else
+            PROJECT_DIR=$(find . -name pubspec.yaml -not -path "*/.dart_tool/*" -not -path "*/build/*" | head -n 1 | xargs dirname)
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: pubspec.yaml not found"
+            echo "Make sure the uploaded ZIP contains a real Flutter project."
+            exit 1
+          fi
+
+          echo "Flutter project found at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BOOK-VIP-release-apk
+          path: ${{ steps.find_project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
