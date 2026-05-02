@@ -1,1 +1,113 @@
+name: Build Flutter APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Extract ZIP files
+        shell: bash
+        run: |
+          mkdir -p extracted_project
+
+          ZIP_FILES=$(find . -type f \( -name "*.zip" -o -name "*.ZIP" \))
+
+          if [ -z "$ZIP_FILES" ]; then
+            echo "No ZIP files found."
+          else
+            echo "$ZIP_FILES" | while read ZIP_FILE; do
+              echo "Extracting: $ZIP_FILE"
+              unzip -o "$ZIP_FILE" -d extracted_project
+            done
+          fi
+
+          echo "Files after extraction:"
+          find . -maxdepth 6 -type f | sed 's#^\./##'
+
+      - name: Find Flutter project
+        id: find_project
+        shell: bash
+        run: |
+          PROJECT_FILE=$(find . -name pubspec.yaml -not -path "*/.dart_tool/*" -not -path "*/build/*" | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: pubspec.yaml not found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+
+          echo "Flutter project found at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Recreate Android project files
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: |
+          flutter create --platforms=android --org com.bookvip .
+
+      - name: Enable AndroidX
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: |
+          mkdir -p android
+          cat > android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
+      - name: Add Android permissions
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+            sed -i '/<manifest/a\
+              <uses-permission android:name="android.permission.INTERNET" />\
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\
+              <uses-permission android:name="android.permission.CAMERA" />\
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\
+              <uses-permission android:name="android.permission.READ_SMS" />\
+              <uses-permission android:name="android.permission.RECEIVE_SMS" />\
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\
+              <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />' "$MANIFEST"
+          fi
+
+      - name: Install dependencies
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BOOK-VIP-release-apk
+          path: ${{ steps.find_project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
